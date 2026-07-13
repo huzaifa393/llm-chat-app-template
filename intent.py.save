@@ -1,0 +1,717 @@
+\"""
+intent.py — Advanced intent detection, language detection, query normalization,
+             and intelligent query expansion.
+             
+ENHANCED VERSION — Added tafseer, quran, prophet stories, duas, fiqh keywords
+"""
+import re
+from config import (
+    INTENT_HADITH, INTENT_QURAN, INTENT_DUA, INTENT_FIQH,
+    INTENT_TAFSEER, INTENT_MIXED, INTENT_GENERAL, INTENT_SMALLTALK
+)
+
+# ── SYNONYM NORMALIZATION ─────────────────────────────
+SYNONYMS = {
+    "supplication": "dua", "supplications": "dua", "pray for": "dua",
+    "prayer for":   "dua", "invocation": "dua",
+    "law":          "fiqh", "jurisprudence": "fiqh",
+    "legal":        "fiqh", "sharia": "fiqh", "shariah": "fiqh",
+    "meaning of":   "tafseer", "tafsir": "tafseer",
+    "exegesis":     "tafseer", "commentary": "tafseer",
+    "interpretation": "tafseer", "explanation": "tafseer",
+    "namaz":  "salah prayer", "roza":   "fasting sawm",
+    "wazifa": "dua dhikr",    "azkaar": "dhikr azkar",
+    "hadees": "hadith",       "hadeeth": "hadith",
+    "ayah":   "verse quran",  "ayat":    "verse quran",
+    "paak":   "tahara purity","wuzu":    "wudu",
+    "qissa":  "story", "waqiah": "story", "incident": "story",
+}
+
+ARABIC_SYNONYMS = {
+    "صلاة":  "prayer salah namaz",
+    "دعاء":  "dua supplication",
+    "صبر":   "patience sabr",
+    "رحمة":  "mercy rahma",
+    "جنة":   "paradise jannah",
+    "جهنم":  "hell jahannam",
+    "نية":   "intention niyyah",
+    "إيمان": "faith iman",
+    "زكاة":  "zakat charity",
+    "حج":    "hajj pilgrimage",
+    "قرآن":  "quran",
+    "حديث":  "hadith",
+    "تفسير": "tafseer",
+    "فقه":   "fiqh",
+    "سنة":   "sunnah",
+    "شكر":   "gratitude shukr",
+    "توكل":  "tawakkul trust",
+    "توبة":  "repentance tawbah",
+    "وضوء":  "wudu purification",
+    "طهارة": "tahara purity",
+    "صيام":  "fasting sawm",
+    "ذكر":   "dhikr remembrance",
+    "تلاوة": "tilawah recitation",
+    "سليمان": "sulayman solomon",
+    "داود": "dawud david",
+    "موسى": "musa moses",
+    "إبراهيم": "ibrahim abraham",
+    "يوسف": "yusuf joseph",
+    "أيوب": "ayyub job",
+    "يونس": "yunus jonah",
+    "عيسى": "isa jesus",
+    "محمد": "muhammad",
+}
+
+# Fiqh Arabic term expansions
+FIQH_ARABIC_MAP = {
+    "wudu":        "وضوء طهارة",
+    "ghusl":       "غسل طهارة",
+    "tayammum":    "تيمم",
+    "salah":       "صلاة",
+    "prayer":      "صلاة",
+    "prayer timings": "مواقيت الصلاة",
+    "zakat":       "زكاة",
+    "fasting":     "صيام صوم",
+    "hajj":        "حج",
+    "nikah":       "نكاح زواج",
+    "marriage":    "نكاح",
+    "divorce":     "طلاق",
+    "inheritance": "ميراث إرث",
+    "halal":       "حلال",
+    "haram":       "حرام",
+    "purification":"طهارة",
+    "breaks wudu": "نواقض الوضوء",
+    "invalidates": "ينقض يبطل",
+    "obligatory":  "واجب فرض",
+    "forbidden":   "محرم حرام",
+    "permitted":   "مباح حلال جائز",
+}
+
+# Smart query expansions per intent
+DUA_EXPANSIONS = {
+    "sleep":      ["before sleeping", "night dua", "bedtime", "Hisnul Muslim sleep", "nawm"],
+    "wake":       ["waking up", "morning dua", "after sleep", "Hisnul Muslim morning"],
+    "eat":        ["before eating", "food dua", "meal supplication", "bismillah"],
+    "toilet":     ["entering toilet", "bathroom dua", "Hisnul Muslim toilet"],
+    "mosque":     ["entering mosque", "masjid dua", "Hisnul Muslim mosque"],
+    "travel":     ["travelling dua", "journey supplication", "safar"],
+    "morning":    ["morning adhkar", "sabah azkar", "Hisnul Muslim morning"],
+    "evening":    ["evening adhkar", "masa azkar", "Hisnul Muslim evening"],
+    "anxiety":    ["distress dua", "worry supplication", "ghamm"],
+    "rain":       ["rain dua", "storm supplication", "matar"],
+    "fatiha":     ["surah fatiha", "before prayer", "opening prayer", "iftitah"],
+    "sujood":     ["prostration dua", "sajda supplication"],
+    "ruku":       ["bowing dua", "ruku supplication"],
+    "tashahhud":  ["sitting prayer", "at-tahiyyat", "after tashahhud"],
+    "protection": ["evil eye", "hasad", "nazar", "protection from harm"],
+    "roza":       ["fasting dua", "roza ki dua", "sehri dua", "iftar dua"],
+    "fasting":    ["roza ki dua", "sawm dua", "sehri ki dua"],
+}
+
+SMALLTALK_PATTERNS = [
+    "what can you do", "what is this", "how does this work",
+    "what do you know", "tell me about yourself", "what are you",
+    "how many hadith", "how much data", "what books", "which books",
+    "your knowledge", "your database", "what sources", "about you",
+    "what is this app", "what is this system", "help me understand",
+    "what knowledge", "kya kar sakte", "kya jante", "ap kya hain",
+    "tum kya ho", "yeh system", "yeh app", "what can i ask",
+    "how can you help", "what do you cover", "what is your knowledge base",
+]
+
+INTENT_KEYWORDS = {
+    INTENT_HADITH: [
+        "hadith", "hadees", "hadeeth", "narrated", "prophet said",
+        "bukhari", "muslim", "tirmidhi", "abu dawud", "ibn majah",
+        "nasai", "sunnah", "qudsi", "sahabi", "companion", "rasulullah",
+        "messenger said", "riyad", "nawawi", "bulugh", "mishkat",
+        "darimi", "malik", "ahmad", "musnad", "مسند", "narrator",
+        "chain of narrators", "isnad",
+    ],
+    
+    INTENT_QURAN: [
+        "quran", "quranic", "verse", "ayah", "ayat", "surah", "sura",
+        "chapter of quran", "allah says in quran", "quran says",
+        "recite", "tilawah", "hafiz", "al-fatiha", "fatiha",
+        "ayatul kursi", "قرآن", "آية", "quran verse", "what does quran",
+        "quran mention", "revealed", "mushaf",
+        # Prophet names in Quran context
+        "suleman", "solomon", "dawud", "dawood", "david",
+        "musa", "moses", "ibrahim", "abraham", "yusuf", "joseph",
+        "ayub", "job", "yunus", "jonah", "nuh", "noah",
+        "isa", "jesus", "yahya", "john", "zakariyya",
+        "harun", "aaron", "hud", "salih", "shuayb", "idris",
+        "story in quran", "quranic story",
+    ],
+    
+    INTENT_DUA: [
+        "dua", "du'a", "duaa", "supplication", "hisnul", "hisnul muslim",
+        "fortress", "azkar", "adhkar", "dhikr", "zikr", "wazifa",
+        "morning dua", "evening dua", "dua before", "dua after",
+        "dua for", "dua when", "what to say when", "what to read",
+        "prayer before", "prayer after", "دعاء", "أذكار",
+        "what dua", "which dua", "recite before", "recite after",
+        "say before", "say after", "say when",
+        # Fasting duas
+        "roza", "roza ki dua", "fasting dua", "sehri dua", "iftar dua",
+        "roza rakhne ki dua", "roza kholne ki dua",
+    ],
+    
+    INTENT_FIQH: [
+        "fiqh", "ruling", "halal", "haram", "permissible", "forbidden",
+        "wajib", "obligatory", "mustahab", "makruh", "wudu", "ghusl",
+        "tayammum", "zakat rules", "fasting rules", "hajj rules",
+        "nikah", "divorce", "inheritance", "sharia", "shariah",
+        "is it allowed", "is it permissible", "can i", "allowed in islam",
+        "فقه", "حلال", "حرام", "maliki", "hanafi", "shafi", "hanbali",
+        "fiqh-maliki", "fiqh-hanafi", "fatwa", "islamic ruling",
+        "breaks", "invalidates", "conditions of", "pillars of",
+        "allowed or not", "is it haram", "is it halal",
+        "cutting", "trimming", "shaving", "prayer timings",
+    ],
+    
+    INTENT_TAFSEER: [
+        "tafseer", "tafsir", "meaning of", "explanation of",
+        "what does quran say about", "ibn kathir", "commentary",
+        "interpretation", "exegesis", "تفسير", "explain quran",
+        "explain surah", "explain ayah", "quran explanation",
+        "why was revealed", "asbab al nuzul", "reason for revelation",
+        "context of verse", "what does this verse mean",
+        "tell me about surah", "explain this ayah", "verse meaning",
+        # Prophet stories in tafseer
+        "hazrat", "alaihis salam", "alayhi salam", "peace be upon him",
+        "suleman", "solomon", "prophet suleman", "sulayman",
+        "dawud", "dawood", "david", "prophet dawud",
+        "musa", "moses", "prophet musa",
+        "ibrahim", "abraham", "prophet ibrahim",
+        "yusuf", "joseph", "prophet yusuf",
+        "ayub", "job", "prophet ayub",
+        "yunus", "jonah", "prophet yunus",
+        "nuh", "noah", "prophet nuh",
+        "isa", "jesus", "prophet isa",
+        "prophet story", "story of prophet", "qissa", "waqiah",
+        "incident of", "event of", "real story",
+    ],
+}
+
+# Mixed intent triggers — query spans multiple domains
+MIXED_TRIGGERS = [
+    ("hadith", "quran"), ("fiqh", "quran"), ("fiqh", "hadith"),
+    ("tafseer", "hadith"), ("tafseer", "quran"),
+    ("dua", "hadith"), ("quran", "tafseer"),
+]
+
+
+def detect_language(text: str) -> str:
+    """
+    Detect query language with English-first rule.
+    If query STARTS with English words -> always English regardless of
+    pasted Arabic content inside.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return "english"
+
+    # Rule 1: starts with 2+ ASCII words -> English
+    first_words = stripped.split()[:5]
+    ascii_word_count = sum(
+        1 for w in first_words
+        if len(w) > 1 and all(c.isascii() for c in w if c.isalpha())
+    )
+    if ascii_word_count >= 2:
+        return "english"
+
+    # Rule 2: dominant script
+    arabic_chars     = len(re.findall(r'[\u0600-\u06FF]', stripped))
+    devanagari_chars = len(re.findall(r'[\u0900-\u097F]', stripped))
+    ascii_chars      = len(re.findall(r'[a-zA-Z]', stripped))
+    total            = max(arabic_chars + devanagari_chars + ascii_chars, 1)
+
+    if arabic_chars / total > 0.5:
+        return "arabic"
+    if devanagari_chars / total > 0.3:
+        return "hindi"
+
+    # Rule 3: Roman Urdu
+    roman_urdu_words = [
+        "kya","hai","hain","mein","ka","ki","ke","ap","aap","yeh","woh",
+        "namaz","roza","dua","hadees","quran","allah","nabi","rasool",
+        "bata","batao","dijiye","chahiye","karo","karna","batain",
+        "jaiz","gunah","sawab","ibadat","masla","masail",
+    ]
+    words   = stripped.lower().split()
+    ru_hits = sum(1 for w in words if w in roman_urdu_words)
+    if ru_hits >= 2:
+        return "roman_urdu"
+
+    return "english"
+
+
+def normalize_query(query: str) -> str:
+    """Apply synonym normalization."""
+    q = query.lower().strip()
+    for src, tgt in SYNONYMS.items():
+        q = q.replace(src, tgt)
+    for arabic, english in ARABIC_SYNONYMS.items():
+        q = q.replace(arabic, english)
+    return q
+
+
+def detect_intent(query: str) -> str:
+    """Classify query into one of 8 intent types."""
+    q = query.lower()
+
+    # Smalltalk first
+    for pattern in SMALLTALK_PATTERNS:
+        if pattern in q:
+            return INTENT_SMALLTALK
+
+    # Score each intent
+    scores = {intent: 0 for intent in INTENT_KEYWORDS}
+    for intent, keywords in INTENT_KEYWORDS.items():
+        for kw in keywords:
+            if kw in q:
+                scores[intent] += 1
+
+    # Check for mixed intent
+    top2 = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:2]
+    if top2[0][1] > 0 and top2[1][1] > 0:
+        pair = tuple(sorted([top2[0][0], top2[1][0]]))
+        if pair in MIXED_TRIGGERS:
+            return INTENT_MIXED
+
+    best = max(scores, key=scores.get)
+    return best if scores[best] > 0 else INTENT_GENERAL
+
+
+def expand_query(query: str, intent: str, lang: str) -> list:
+    """
+    Intelligent multi-variant query expansion for better retrieval recall.
+    Returns up to 4 query variants.
+    """
+    normalized = normalize_query(query)
+    q_lower    = query.lower()
+    queries    = [query]
+
+    if normalized != q_lower:
+        queries.append(normalized)
+
+    # Arabic expansion
+    for arabic, english in ARABIC_SYNONYMS.items():
+        if arabic in query:
+            queries.append(f"{english} {normalized}")
+            break
+
+    # DUA: smart contextual expansion
+    if intent == INTENT_DUA:
+        for trigger, expansions in DUA_EXPANSIONS.items():
+            if trigger in q_lower:
+                queries.extend(expansions[:2])
+                break
+        if "hisnul" not in q_lower:
+            queries.append(f"Hisnul Muslim {query}")
+
+    # FIQH: add Arabic translation of key terms for better fiqh retrieval
+    elif intent == INTENT_FIQH:
+        for eng_term, arabic_terms in FIQH_ARABIC_MAP.items():
+            if eng_term in q_lower:
+                queries.append(f"{arabic_terms} {query}")
+                break
+        queries.append(f"Islamic ruling fiqh {query}")
+
+    # HADITH: add narrator-style expansion
+    elif intent == INTENT_HADITH:
+        queries.append(f"narrated hadith {query}")
+
+    # QURAN: add verse-style expansion
+    elif intent == INTENT_QURAN:
+        queries.append(f"Quran verse ayah surah {query}")
+
+    # TAFSEER: add tafseer-style expansion
+    elif intent == INTENT_TAFSEER:
+        queries.append(f"tafseer ibn kathir explanation {query}")
+
+    # MIXED: add both hadith and quran variants
+    elif intent == INTENT_MIXED:
+        queries.append(f"hadith {query}")
+        queries.append(f"quran verse {query}")
+
+    # Deduplicate preserving order
+    seen, out = set(), []
+    for q in queries:
+        k = q.strip()
+        if k and k not in seen:
+            seen.add(k)
+            out.append(k)
+    return out[:4]
+
+
+def get_fiqh_arabic_query(query: str) -> str:
+    """For fiqh queries, generate Arabic equivalent for better fiqh DB retrieval."""
+    q = query.lower()
+    arabic_parts = []
+    for eng, arabic in FIQH_ARABIC_MAP.items():
+        if eng in q:
+            arabic_parts.append(arabic)
+    if arabic_parts:
+        return " ".join(arabic_parts)
+    return ""
+"""
+intent.py — Advanced intent detection, language detection, query normalization,
+             and intelligent query expansion.
+             
+ENHANCED VERSION — Added tafseer, quran, prophet stories, duas, fiqh keywords
+"""
+import re
+from config import (
+    INTENT_HADITH, INTENT_QURAN, INTENT_DUA, INTENT_FIQH,
+    INTENT_TAFSEER, INTENT_MIXED, INTENT_GENERAL, INTENT_SMALLTALK
+)
+
+# ── SYNONYM NORMALIZATION ─────────────────────────────
+SYNONYMS = {
+    "supplication": "dua", "supplications": "dua", "pray for": "dua",
+    "prayer for":   "dua", "invocation": "dua",
+    "law":          "fiqh", "jurisprudence": "fiqh",
+    "legal":        "fiqh", "sharia": "fiqh", "shariah": "fiqh",
+    "meaning of":   "tafseer", "tafsir": "tafseer",
+    "exegesis":     "tafseer", "commentary": "tafseer",
+    "interpretation": "tafseer", "explanation": "tafseer",
+    "namaz":  "salah prayer", "roza":   "fasting sawm",
+    "wazifa": "dua dhikr",    "azkaar": "dhikr azkar",
+    "hadees": "hadith",       "hadeeth": "hadith",
+    "ayah":   "verse quran",  "ayat":    "verse quran",
+    "paak":   "tahara purity","wuzu":    "wudu",
+    "qissa":  "story", "waqiah": "story", "incident": "story",
+}
+
+ARABIC_SYNONYMS = {
+    "صلاة":  "prayer salah namaz",
+    "دعاء":  "dua supplication",
+    "صبر":   "patience sabr",
+    "رحمة":  "mercy rahma",
+    "جنة":   "paradise jannah",
+    "جهنم":  "hell jahannam",
+    "نية":   "intention niyyah",
+    "إيمان": "faith iman",
+    "زكاة":  "zakat charity",
+    "حج":    "hajj pilgrimage",
+    "قرآن":  "quran",
+    "حديث":  "hadith",
+    "تفسير": "tafseer",
+    "فقه":   "fiqh",
+    "سنة":   "sunnah",
+    "شكر":   "gratitude shukr",
+    "توكل":  "tawakkul trust",
+    "توبة":  "repentance tawbah",
+    "وضوء":  "wudu purification",
+    "طهارة": "tahara purity",
+    "صيام":  "fasting sawm",
+    "ذكر":   "dhikr remembrance",
+    "تلاوة": "tilawah recitation",
+    "سليمان": "sulayman solomon",
+    "داود": "dawud david",
+    "موسى": "musa moses",
+    "إبراهيم": "ibrahim abraham",
+    "يوسف": "yusuf joseph",
+    "أيوب": "ayyub job",
+    "يونس": "yunus jonah",
+    "عيسى": "isa jesus",
+    "محمد": "muhammad",
+}
+
+# Fiqh Arabic term expansions
+FIQH_ARABIC_MAP = {
+    "wudu":        "وضوء طهارة",
+    "ghusl":       "غسل طهارة",
+    "tayammum":    "تيمم",
+    "salah":       "صلاة",
+    "prayer":      "صلاة",
+    "prayer timings": "مواقيت الصلاة",
+    "zakat":       "زكاة",
+    "fasting":     "صيام صوم",
+    "hajj":        "حج",
+    "nikah":       "نكاح زواج",
+    "marriage":    "نكاح",
+    "divorce":     "طلاق",
+    "inheritance": "ميراث إرث",
+    "halal":       "حلال",
+    "haram":       "حرام",
+    "purification":"طهارة",
+    "breaks wudu": "نواقض الوضوء",
+    "invalidates": "ينقض يبطل",
+    "obligatory":  "واجب فرض",
+    "forbidden":   "محرم حرام",
+    "permitted":   "مباح حلال جائز",
+}
+
+# Smart query expansions per intent
+DUA_EXPANSIONS = {
+    "sleep":      ["before sleeping", "night dua", "bedtime", "Hisnul Muslim sleep", "nawm"],
+    "wake":       ["waking up", "morning dua", "after sleep", "Hisnul Muslim morning"],
+    "eat":        ["before eating", "food dua", "meal supplication", "bismillah"],
+    "toilet":     ["entering toilet", "bathroom dua", "Hisnul Muslim toilet"],
+    "mosque":     ["entering mosque", "masjid dua", "Hisnul Muslim mosque"],
+    "travel":     ["travelling dua", "journey supplication", "safar"],
+    "morning":    ["morning adhkar", "sabah azkar", "Hisnul Muslim morning"],
+    "evening":    ["evening adhkar", "masa azkar", "Hisnul Muslim evening"],
+    "anxiety":    ["distress dua", "worry supplication", "ghamm"],
+    "rain":       ["rain dua", "storm supplication", "matar"],
+    "fatiha":     ["surah fatiha", "before prayer", "opening prayer", "iftitah"],
+    "sujood":     ["prostration dua", "sajda supplication"],
+    "ruku":       ["bowing dua", "ruku supplication"],
+    "tashahhud":  ["sitting prayer", "at-tahiyyat", "after tashahhud"],
+    "protection": ["evil eye", "hasad", "nazar", "protection from harm"],
+    "roza":       ["fasting dua", "roza ki dua", "sehri dua", "iftar dua"],
+    "fasting":    ["roza ki dua", "sawm dua", "sehri ki dua"],
+}
+
+SMALLTALK_PATTERNS = [
+    "what can you do", "what is this", "how does this work",
+    "what do you know", "tell me about yourself", "what are you",
+    "how many hadith", "how much data", "what books", "which books",
+    "your knowledge", "your database", "what sources", "about you",
+    "what is this app", "what is this system", "help me understand",
+    "what knowledge", "kya kar sakte", "kya jante", "ap kya hain",
+    "tum kya ho", "yeh system", "yeh app", "what can i ask",
+    "how can you help", "what do you cover", "what is your knowledge base",
+]
+
+INTENT_KEYWORDS = {
+    INTENT_HADITH: [
+        "hadith", "hadees", "hadeeth", "narrated", "prophet said",
+        "bukhari", "muslim", "tirmidhi", "abu dawud", "ibn majah",
+        "nasai", "sunnah", "qudsi", "sahabi", "companion", "rasulullah",
+        "messenger said", "riyad", "nawawi", "bulugh", "mishkat",
+        "darimi", "malik", "ahmad", "musnad", "مسند", "narrator",
+        "chain of narrators", "isnad",
+    ],
+    
+    INTENT_QURAN: [
+        "quran", "quranic", "verse", "ayah", "ayat", "surah", "sura",
+        "chapter of quran", "allah says in quran", "quran says",
+        "recite", "tilawah", "hafiz", "al-fatiha", "fatiha",
+        "ayatul kursi", "قرآن", "آية", "quran verse", "what does quran",
+        "quran mention", "revealed", "mushaf",
+        # Prophet names in Quran context
+        "suleman", "solomon", "dawud", "dawood", "david",
+        "musa", "moses", "ibrahim", "abraham", "yusuf", "joseph",
+        "ayub", "job", "yunus", "jonah", "nuh", "noah",
+        "isa", "jesus", "yahya", "john", "zakariyya",
+        "harun", "aaron", "hud", "salih", "shuayb", "idris",
+        "story in quran", "quranic story",
+    ],
+    
+    INTENT_DUA: [
+        "dua", "du'a", "duaa", "supplication", "hisnul", "hisnul muslim",
+        "fortress", "azkar", "adhkar", "dhikr", "zikr", "wazifa",
+        "morning dua", "evening dua", "dua before", "dua after",
+        "dua for", "dua when", "what to say when", "what to read",
+        "prayer before", "prayer after", "دعاء", "أذكار",
+        "what dua", "which dua", "recite before", "recite after",
+        "say before", "say after", "say when",
+        # Fasting duas
+        "roza", "roza ki dua", "fasting dua", "sehri dua", "iftar dua",
+        "roza rakhne ki dua", "roza kholne ki dua",
+    ],
+    
+    INTENT_FIQH: [
+        "fiqh", "ruling", "halal", "haram", "permissible", "forbidden",
+        "wajib", "obligatory", "mustahab", "makruh", "wudu", "ghusl",
+        "tayammum", "zakat rules", "fasting rules", "hajj rules",
+        "nikah", "divorce", "inheritance", "sharia", "shariah",
+        "is it allowed", "is it permissible", "can i", "allowed in islam",
+        "فقه", "حلال", "حرام", "maliki", "hanafi", "shafi", "hanbali",
+        "fiqh-maliki", "fiqh-hanafi", "fatwa", "islamic ruling",
+        "breaks", "invalidates", "conditions of", "pillars of",
+        "allowed or not", "is it haram", "is it halal",
+        "cutting", "trimming", "shaving", "prayer timings",
+    ],
+    
+    INTENT_TAFSEER: [
+        "tafseer", "tafsir", "meaning of", "explanation of",
+        "what does quran say about", "ibn kathir", "commentary",
+        "interpretation", "exegesis", "تفسير", "explain quran",
+        "explain surah", "explain ayah", "quran explanation",
+        "why was revealed", "asbab al nuzul", "reason for revelation",
+        "context of verse", "what does this verse mean",
+        "tell me about surah", "explain this ayah", "verse meaning",
+        # Prophet stories in tafseer
+        "hazrat", "alaihis salam", "alayhi salam", "peace be upon him",
+        "suleman", "solomon", "prophet suleman", "sulayman",
+        "dawud", "dawood", "david", "prophet dawud",
+        "musa", "moses", "prophet musa",
+        "ibrahim", "abraham", "prophet ibrahim",
+        "yusuf", "joseph", "prophet yusuf",
+        "ayub", "job", "prophet ayub",
+        "yunus", "jonah", "prophet yunus",
+        "nuh", "noah", "prophet nuh",
+        "isa", "jesus", "prophet isa",
+        "prophet story", "story of prophet", "qissa", "waqiah",
+        "incident of", "event of", "real story",
+    ],
+}
+
+# Mixed intent triggers — query spans multiple domains
+MIXED_TRIGGERS = [
+    ("hadith", "quran"), ("fiqh", "quran"), ("fiqh", "hadith"),
+    ("tafseer", "hadith"), ("tafseer", "quran"),
+    ("dua", "hadith"), ("quran", "tafseer"),
+]
+
+
+def detect_language(text: str) -> str:
+    """
+    Detect query language with English-first rule.
+    If query STARTS with English words -> always English regardless of
+    pasted Arabic content inside.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return "english"
+
+    # Rule 1: starts with 2+ ASCII words -> English
+    first_words = stripped.split()[:5]
+    ascii_word_count = sum(
+        1 for w in first_words
+        if len(w) > 1 and all(c.isascii() for c in w if c.isalpha())
+    )
+    if ascii_word_count >= 2:
+        return "english"
+
+    # Rule 2: dominant script
+    arabic_chars     = len(re.findall(r'[\u0600-\u06FF]', stripped))
+    devanagari_chars = len(re.findall(r'[\u0900-\u097F]', stripped))
+    ascii_chars      = len(re.findall(r'[a-zA-Z]', stripped))
+    total            = max(arabic_chars + devanagari_chars + ascii_chars, 1)
+
+    if arabic_chars / total > 0.5:
+        return "arabic"
+    if devanagari_chars / total > 0.3:
+        return "hindi"
+
+    # Rule 3: Roman Urdu
+    roman_urdu_words = [
+        "kya","hai","hain","mein","ka","ki","ke","ap","aap","yeh","woh",
+        "namaz","roza","dua","hadees","quran","allah","nabi","rasool",
+        "bata","batao","dijiye","chahiye","karo","karna","batain",
+        "jaiz","gunah","sawab","ibadat","masla","masail",
+    ]
+    words   = stripped.lower().split()
+    ru_hits = sum(1 for w in words if w in roman_urdu_words)
+    if ru_hits >= 2:
+        return "roman_urdu"
+
+    return "english"
+
+
+def normalize_query(query: str) -> str:
+    """Apply synonym normalization."""
+    q = query.lower().strip()
+    for src, tgt in SYNONYMS.items():
+        q = q.replace(src, tgt)
+    for arabic, english in ARABIC_SYNONYMS.items():
+        q = q.replace(arabic, english)
+    return q
+
+
+def detect_intent(query: str) -> str:
+    """Classify query into one of 8 intent types."""
+    q = query.lower()
+
+    # Smalltalk first
+    for pattern in SMALLTALK_PATTERNS:
+        if pattern in q:
+            return INTENT_SMALLTALK
+
+    # Score each intent
+    scores = {intent: 0 for intent in INTENT_KEYWORDS}
+    for intent, keywords in INTENT_KEYWORDS.items():
+        for kw in keywords:
+            if kw in q:
+                scores[intent] += 1
+
+    # Check for mixed intent
+    top2 = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:2]
+    if top2[0][1] > 0 and top2[1][1] > 0:
+        pair = tuple(sorted([top2[0][0], top2[1][0]]))
+        if pair in MIXED_TRIGGERS:
+            return INTENT_MIXED
+
+    best = max(scores, key=scores.get)
+    return best if scores[best] > 0 else INTENT_GENERAL
+
+
+def expand_query(query: str, intent: str, lang: str) -> list:
+    """
+    Intelligent multi-variant query expansion for better retrieval recall.
+    Returns up to 4 query variants.
+    """
+    normalized = normalize_query(query)
+    q_lower    = query.lower()
+    queries    = [query]
+
+    if normalized != q_lower:
+        queries.append(normalized)
+
+    # Arabic expansion
+    for arabic, english in ARABIC_SYNONYMS.items():
+        if arabic in query:
+            queries.append(f"{english} {normalized}")
+            break
+
+    # DUA: smart contextual expansion
+    if intent == INTENT_DUA:
+        for trigger, expansions in DUA_EXPANSIONS.items():
+            if trigger in q_lower:
+                queries.extend(expansions[:2])
+                break
+        if "hisnul" not in q_lower:
+            queries.append(f"Hisnul Muslim {query}")
+
+    # FIQH: add Arabic translation of key terms for better fiqh retrieval
+    elif intent == INTENT_FIQH:
+        for eng_term, arabic_terms in FIQH_ARABIC_MAP.items():
+            if eng_term in q_lower:
+                queries.append(f"{arabic_terms} {query}")
+                break
+        queries.append(f"Islamic ruling fiqh {query}")
+
+    # HADITH: add narrator-style expansion
+    elif intent == INTENT_HADITH:
+        queries.append(f"narrated hadith {query}")
+
+    # QURAN: add verse-style expansion
+    elif intent == INTENT_QURAN:
+        queries.append(f"Quran verse ayah surah {query}")
+
+    # TAFSEER: add tafseer-style expansion
+    elif intent == INTENT_TAFSEER:
+        queries.append(f"tafseer ibn kathir explanation {query}")
+
+    # MIXED: add both hadith and quran variants
+    elif intent == INTENT_MIXED:
+        queries.append(f"hadith {query}")
+        queries.append(f"quran verse {query}")
+
+    # Deduplicate preserving order
+    seen, out = set(), []
+    for q in queries:
+        k = q.strip()
+        if k and k not in seen:
+            seen.add(k)
+            out.append(k)
+    return out[:4]
+
+
+def get_fiqh_arabic_query(query: str) -> str:
+    """For fiqh queries, generate Arabic equivalent for better fiqh DB retrieval."""
+    q = query.lower()
+    arabic_parts = []
+    for eng, arabic in FIQH_ARABIC_MAP.items():
+        if eng in q:
+            arabic_parts.append(arabic)
+    if arabic_parts:
+        return " ".join(arabic_parts)
+    return ""
+       

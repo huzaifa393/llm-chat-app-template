@@ -1,0 +1,25 @@
+# Check these items:
+
+## 1. Missing Packages (install if needed):
+# pip3.11 install boto3 PyPDF2 pdfminer.six
+
+## 2. Missing Directories (create if needed):
+# mkdir -p pdf_books csv_books processed_books
+
+## 3. S3 Setup (if not configured):
+# aws configure
+# aws s3 mb s3://islamic-rag-books
+# aws s3api put-object --bucket islamic-rag-books --key books-to-ingest/
+# aws s3api put-object --bucket islamic-rag-books --key books-processed/
+
+## 4. Update ingest.py with your S3 bucket name:
+# Edit line: S3_BUCKET = "islamic-rag-books"
+
+## 5. Sample books to add (download first):
+# wget -O pdf_books/sample.pdf "https://example.com/book.pdf"
+
+## 6. Verify ChromaDB has core data:
+# Should show 40,654+ documents
+
+## 7. Test new ingest:
+# python3.11 ingest.py --test-corrupted
